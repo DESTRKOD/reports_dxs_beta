@@ -3,7 +3,8 @@ import requests
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
-
+import os
+from aiohttp import web
 
 CONFIG = {
     "TELEGRAM_BOT_TOKEN": os.getenv('TELEGRAM_BOT_TOKEN'),
@@ -110,15 +111,27 @@ class SimpleOrderBot:
         except Exception as e:
             print(f"❌ Ошибка проверки заказов: {e}")
     
-    async def run(self):
+    async def run_continuous(self):
         print("🚀 Бот запущен! Ожидаю новые заказы...")
         print("⏰ Проверка каждые 10 секунд...")
         while True:
             await self.check_orders()
             await asyncio.sleep(10)
 
-async def main():
-    # Проверка конфигурации
+# HTTP сервер для Web Service
+async def health_check(request):
+    return web.Response(text='Bot is running!')
+
+async def start_background_tasks(app):
+    # Запуск бота в фоне
+    asyncio.create_task(app['bot'].run_continuous())
+
+async def create_app():
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+    
+    # Инициализация бота
     required_env_vars = [
         'TELEGRAM_BOT_TOKEN',
         'TELEGRAM_ADMIN_CHAT_ID', 
@@ -133,15 +146,17 @@ async def main():
     missing_vars = [var for var in required_env_vars if not os.getenv(var)]
     if missing_vars:
         print(f"❌ Ошибка: Не заполнены переменные окружения: {', '.join(missing_vars)}")
-        return
+        return app
     
-    bot = SimpleOrderBot(
+    app['bot'] = SimpleOrderBot(
         bot_token=CONFIG["TELEGRAM_BOT_TOKEN"],
         admin_chat_id=CONFIG["TELEGRAM_ADMIN_CHAT_ID"],
         firebase_config=CONFIG["FIREBASE_CONFIG"]
     )
     
-    await bot.run()
+    app.on_startup.append(start_background_tasks)
+    return app
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    port = int(os.environ.get("PORT", 8000))
+    web.run_app(create_app(), port=port)
